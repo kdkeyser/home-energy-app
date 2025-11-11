@@ -7,7 +7,7 @@ class ViewModelFactory(private val appContainer: AppContainer) : ViewModelProvid
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
             modelClass.isAssignableFrom(LoginViewModel::class.java) -> {
-                LoginViewModel(appContainer.webSocketClient) as T
+                LoginViewModel(appContainer.webSocketClient, appContainer.credentialsManager) as T
             }
             modelClass.isAssignableFrom(ChargerViewModel::class.java) -> {
                 ChargerViewModel(appContainer.webSocketClient) as T

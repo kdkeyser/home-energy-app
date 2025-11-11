@@ -28,6 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -118,49 +119,57 @@ fun LoginScreen(navController: NavController, viewModel: LoginViewModel) {
     ) {
         Text("Welcome", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(24.dp))
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Username") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            label = { Text("Password") },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = { viewModel.login(username, password) }
-            ),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(
-            onClick = { viewModel.login(username, password) },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Login")
-        }
-
-        if (loginState is LoginState.Error) {
-            Text(
-                text = (loginState as LoginState.Error).message,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 8.dp)
+        
+        if (loginState is LoginState.Loading) {
+            CircularProgressIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Logging in...", fontSize = 16.sp)
+        } else {
+            OutlinedTextField(
+                value = username,
+                onValueChange = { username = it },
+                label = { Text("Username") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
             )
+            Spacer(modifier = Modifier.height(16.dp))
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Password") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { viewModel.login(username, password) }
+                ),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = { viewModel.login(username, password) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Login")
+            }
+
+            if (loginState is LoginState.Error) {
+                Text(
+                    text = (loginState as LoginState.Error).message,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
         }
 
         LaunchedEffect(loginState) {
             if (loginState is LoginState.Success) {
-                navController.navigate("main/$username") {
+                val successState = loginState as LoginState.Success
+                navController.navigate("main/${successState.username}") {
                     popUpTo("login") { inclusive = true }
                 }
             }
@@ -480,6 +489,8 @@ fun PowerSummary(
     chargerPower: Double,
     heatPumpPower: Double
 ) {
+    val totalPower = gridPower + solarPower + chargerPower + heatPumpPower
+    
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text("Power Consumption", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -488,6 +499,30 @@ fun PowerSummary(
             PowerSource(label = "Solar", power = solarPower, isProduction = true)
             PowerSource(label = "Car Charger", power = chargerPower)
             PowerSource(label = "Heat Pump", power = heatPumpPower)
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Total",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "%.2f kW".format(kotlin.math.abs(totalPower) / 1000),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (totalPower < 0) Color(0xFF4CAF50) else Color(0xFFF44336)
+                )
+            }
         }
     }
 }
@@ -503,10 +538,10 @@ fun PowerSource(label: String, power: Double, isProduction: Boolean = false) {
     ) {
         Text(label, fontSize = 16.sp)
         Text(
-            text = "%.2f kW".format(power / 1000),
+            text = "%.2f kW".format(kotlin.math.abs(power) / 1000),
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
-            color = if (isProduction) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+            color = if (power < 0) Color(0xFF4CAF50) else Color(0xFFF44336)
         )
     }
 }
@@ -667,22 +702,45 @@ class OverviewViewModel(private val webSocketClient: WebSocketClient) : ViewMode
 
 sealed class LoginState {
     object Idle : LoginState()
-    object Success : LoginState()
+    object Loading : LoginState()
+    data class Success(val username: String) : LoginState()
     data class Error(val message: String) : LoginState()
 }
 
-class LoginViewModel(private val webSocketClient: WebSocketClient) : ViewModel() {
+class LoginViewModel(
+    private val webSocketClient: WebSocketClient,
+    private val credentialsManager: CredentialsManager
+) : ViewModel() {
     private val _loginState = MutableStateFlow<LoginState>(LoginState.Idle)
     val loginState: StateFlow<LoginState> = _loginState.asStateFlow()
+    
+    private var currentUsername = ""
 
     init {
         viewModelScope.launch {
             webSocketClient.connectionStatus.collect { status ->
                 when (status) {
-                    is ConnectionStatus.Connected -> _loginState.value = LoginState.Success
+                    is ConnectionStatus.Connected -> _loginState.value = LoginState.Success(currentUsername)
                     is ConnectionStatus.Error -> _loginState.value = LoginState.Error(status.message)
                     is ConnectionStatus.Unauthorized -> _loginState.value = LoginState.Error("Invalid username or password")
-                    is ConnectionStatus.Idle -> _loginState.value = LoginState.Idle
+                    is ConnectionStatus.Idle -> {
+                        if (_loginState.value is LoginState.Loading) {
+                            // Keep loading state during auto-login
+                        } else {
+                            _loginState.value = LoginState.Idle
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Attempt auto-login with saved credentials
+        viewModelScope.launch {
+            credentialsManager.credentials.collect { credentials ->
+                if (credentials != null && _loginState.value is LoginState.Idle) {
+                    currentUsername = credentials.username
+                    _loginState.value = LoginState.Loading
+                    webSocketClient.connect(credentials.username, credentials.password)
                 }
             }
         }
@@ -690,6 +748,10 @@ class LoginViewModel(private val webSocketClient: WebSocketClient) : ViewModel()
 
     fun login(username: String, password: String) {
         if (username.isNotEmpty() && password.isNotEmpty()) {
+            currentUsername = username
+            viewModelScope.launch {
+                credentialsManager.saveCredentials(username, password)
+            }
             webSocketClient.connect(username, password)
         } else {
             _loginState.value = LoginState.Error("Username and password cannot be empty")
@@ -697,6 +759,9 @@ class LoginViewModel(private val webSocketClient: WebSocketClient) : ViewModel()
     }
 
     fun logout() {
+        viewModelScope.launch {
+            credentialsManager.clearCredentials()
+        }
         webSocketClient.disconnect()
     }
 }
