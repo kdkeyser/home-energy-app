@@ -76,14 +76,16 @@ class WebSocketClient {
                                         Log.d("WebSocketClient", "Authentication successful.")
                                     }
                                     is Message.Unauthorized -> {
-                                        _connectionStatus.value = ConnectionStatus.Unauthorized
                                         disconnect()
+                                        _connectionStatus.value = ConnectionStatus.Unauthorized
+                                        Log.d("WebSocketClient", "Authentication failed.")
+
                                         break
                                     }
                                     else -> {
+                                        disconnect()
                                         Log.w("WebSocketClient", "Received message while not authenticated: $message")
                                         _connectionStatus.value = ConnectionStatus.Error("Received message while not authenticated: $message")
-                                        disconnect()
                                         break
                                     }
                                 }
