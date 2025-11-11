@@ -636,6 +636,7 @@ class LoginViewModel(private val webSocketClient: WebSocketClient) : ViewModel()
                 when (status) {
                     is ConnectionStatus.Connected -> _loginState.value = LoginState.Success
                     is ConnectionStatus.Error -> _loginState.value = LoginState.Error(status.message)
+                    is ConnectionStatus.Unauthorized -> _loginState.value = LoginState.Error("Invalid username or password")
                     is ConnectionStatus.Idle -> _loginState.value = LoginState.Idle
                 }
             }

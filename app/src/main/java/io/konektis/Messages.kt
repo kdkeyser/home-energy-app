@@ -1,4 +1,4 @@
-package com.example.carcharger
+package io.konektis
 
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
@@ -31,14 +31,29 @@ data class Update(val device: Devices, val power: Int)
 
 @Serializable
 sealed class Message {
-    data class SetCharging(val chargingState: ChargingState) : Message()
+    // Messages from server
+    @Serializable
     data class PowerUsageUpdate(val updates: List<Update>) : Message()
+    @Serializable
+    data class Authenticated(val username: String) : Message()
+    @Serializable
+    data class Unauthorized(val username: String) : Message()
+}
+
+@Serializable
+sealed class ClientMessage {
+    // Messages from client
+    @Serializable data class SetCharging(val chargingState: ChargingState) : ClientMessage()
+    @Serializable data class Authenticate(val username : String, val password: String) : ClientMessage()
 }
 
 fun deserializeMessage(json: String): Message {
     return Json.decodeFromString<Message>(json)
 }
 
+fun deserializeClientMessage(json: String): ClientMessage {
+    return Json.decodeFromString<ClientMessage>(json)
+}
 fun randomPowerUsageUpdate(): Message {
     return Message.PowerUsageUpdate(
         listOf(

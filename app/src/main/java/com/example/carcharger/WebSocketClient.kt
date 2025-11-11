@@ -1,11 +1,11 @@
 package com.example.carcharger
 
 import android.util.Log
+import io.konektis.ClientMessage
+import io.konektis.Message
+import io.konektis.deserializeMessage
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.auth.Auth
-import io.ktor.client.plugins.auth.providers.BasicAuthCredentials
-import io.ktor.client.plugins.auth.providers.basic
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
@@ -29,6 +29,7 @@ import kotlinx.serialization.json.Json
 sealed class ConnectionStatus {
     object Idle : ConnectionStatus()
     object Connected : ConnectionStatus()
+    object Unauthorized : ConnectionStatus()
     data class Error(val message: String) : ConnectionStatus()
 }
 
@@ -40,7 +41,6 @@ class WebSocketClient {
 
     private var session: DefaultClientWebSocketSession? = null
     private var job: Job? = null
-    private var credentials: Pair<String, String>? = null
 
     private val _messages = MutableSharedFlow<Message>()
     val messages = _messages.asSharedFlow()
@@ -50,32 +50,43 @@ class WebSocketClient {
 
     fun connect(username: String, password: String) {
         if (job?.isActive == true) {
-            return 
+            return
         }
-        credentials = username to password
         _connectionStatus.value = ConnectionStatus.Idle
         job = CoroutineScope(Dispatchers.IO).launch {
             while (isActive) {
                 try {
                     Log.d("WebSocketClient", "Attempting to connect...")
-                    val authedClient = client.config {
-                        install(Auth) {
-                            basic {
-                                credentials { BasicAuthCredentials(username = credentials!!.first, password = credentials!!.second) }
-                            }
-                        }
-                    }
-                    authedClient.webSocket(method = HttpMethod.Get, host = "192.168.129.60", port = 8080, path = "/ws") {
+                    client.webSocket(method = HttpMethod.Get, host = "192.168.129.60", port = 8080, path = "/ws") {
                         session = this
-                        Log.d("WebSocketClient", "Connection successful.")
-                        if (_connectionStatus.value !is ConnectionStatus.Connected) {
-                            _connectionStatus.value = ConnectionStatus.Connected
-                        }
+
+                        // Send authentication message
+                        val authMessage = ClientMessage.Authenticate(username, password)
+                        sendMessage(authMessage)
 
                         for (frame in incoming) {
                             if (frame is Frame.Text) {
                                 val json = frame.readText()
-                                _messages.emit(deserializeMessage(json))
+                                Log.d("WebSocketClient", "Message received: $json")
+                                val message = deserializeMessage(json)
+
+                                when (message) {
+                                    is Message.Authenticated -> {
+                                        _connectionStatus.value = ConnectionStatus.Connected
+                                        Log.d("WebSocketClient", "Authentication successful.")
+                                    }
+                                    is Message.Unauthorized -> {
+                                        _connectionStatus.value = ConnectionStatus.Unauthorized
+                                        disconnect()
+                                        break
+                                    }
+                                    else -> {
+                                        Log.w("WebSocketClient", "Received message while not authenticated: $message")
+                                        _connectionStatus.value = ConnectionStatus.Error("Received message while not authenticated: $message")
+                                        disconnect()
+                                        break
+                                    }
+                                }
                             }
                         }
                     }
@@ -83,32 +94,25 @@ class WebSocketClient {
                     Log.d("WebSocketClient", "Connection job cancelled.")
                     break
                 } catch (e: Exception) {
+                    _connectionStatus.value = ConnectionStatus.Error(e.message ?: "Unknown error")
                     Log.e("WebSocketClient", "Connection failed.", e)
-                    if (e is io.ktor.client.plugins.ClientRequestException && e.response.status.value == 401) {
-                        _connectionStatus.value = ConnectionStatus.Error("Invalid username or password")
-                        disconnect()
-                        break
-                    }
+                    delay(5000)
                 } finally {
                     session?.close()
                     session = null
                     Log.d("WebSocketClient", "Connection closed.")
-                    if (isActive) {
-                        Log.d("WebSocketClient", "Reconnecting in 5 seconds...")
-                        delay(5000)
-                    }
                 }
             }
         }
     }
 
-    suspend fun sendMessage(message: Message) {
+    suspend fun sendMessage(clientMessage: ClientMessage) {
         if (session?.isActive != true) {
             Log.w("WebSocketClient", "No active session to send message.")
             return
         }
         try {
-            val json = Json.encodeToString(Message.serializer(), message)
+            val json = Json.encodeToString( clientMessage)
             session?.send(Frame.Text(json))
         } catch (e: Exception) {
             Log.e("WebSocketClient", "Failed to send message", e)
@@ -119,7 +123,6 @@ class WebSocketClient {
         Log.d("WebSocketClient", "Disconnecting...")
         job?.cancel()
         job = null
-        credentials = null
         _connectionStatus.value = ConnectionStatus.Idle
     }
 }
