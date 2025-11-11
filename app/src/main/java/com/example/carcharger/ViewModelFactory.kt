@@ -5,10 +5,17 @@ import androidx.lifecycle.ViewModelProvider
 
 class ViewModelFactory(private val appContainer: AppContainer) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(LoginViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return LoginViewModel(appContainer.webSocketClient) as T
+        return when {
+            modelClass.isAssignableFrom(LoginViewModel::class.java) -> {
+                LoginViewModel(appContainer.webSocketClient) as T
+            }
+            modelClass.isAssignableFrom(ChargerViewModel::class.java) -> {
+                ChargerViewModel(appContainer.webSocketClient) as T
+            }
+            modelClass.isAssignableFrom(OverviewViewModel::class.java) -> {
+                OverviewViewModel(appContainer.webSocketClient) as T
+            }
+            else -> throw IllegalArgumentException("Unknown ViewModel class")
         }
-        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

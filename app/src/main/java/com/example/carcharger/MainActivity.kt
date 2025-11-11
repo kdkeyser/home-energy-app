@@ -37,7 +37,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -46,6 +45,8 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import io.konektis.Devices
+import io.konektis.Message
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,7 +72,8 @@ class MainActivity : ComponentActivity() {
 fun AppNavigation() {
     val navController = rememberNavController()
     val appContainer = (LocalContext.current.applicationContext as CarChargerApplication).container
-    val loginViewModel: LoginViewModel = viewModel(factory = ViewModelFactory(appContainer))
+    val factory = ViewModelFactory(appContainer)
+    val loginViewModel: LoginViewModel = viewModel(factory = factory)
 
     NavHost(navController = navController, startDestination = "login") {
         composable("login") {
@@ -81,7 +83,7 @@ fun AppNavigation() {
             )
         }
         composable("main/{username}") { backStackEntry ->
-            MainScreen(navController, backStackEntry.arguments?.getString("username") ?: "")
+            MainScreen(navController, backStackEntry.arguments?.getString("username") ?: "", factory)
         }
         composable("profile/{username}") { backStackEntry ->
             ProfileScreen(
@@ -187,10 +189,10 @@ data class BottomNavigationItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(navController: NavController, username: String) {
+fun MainScreen(navController: NavController, username: String, factory: ViewModelFactory) {
     val items = listOf(
-        BottomNavigationItem("Overview", Icons.Filled.Home) { OverviewScreen() },
-        BottomNavigationItem("Charger", Icons.Filled.EvStation) { ChargerScreen() },
+        BottomNavigationItem("Overview", Icons.Filled.Home) { OverviewScreen(viewModel(factory = factory)) },
+        BottomNavigationItem("Charger", Icons.Filled.EvStation) { ChargerScreen(viewModel(factory = factory)) },
         BottomNavigationItem("Heat Pump", Icons.Filled.Thermostat) { HeatPumpScreen() }
     )
 
@@ -278,7 +280,7 @@ fun ProfileScreen(navController: NavController, username: String, onLogout: () -
 }
 
 @Composable
-fun ChargerScreen(viewModel: ChargerViewModel = viewModel()) {
+fun ChargerScreen(viewModel: ChargerViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     
     Column(
@@ -448,7 +450,7 @@ fun ChargerScreen(viewModel: ChargerViewModel = viewModel()) {
 }
 
 @Composable
-fun OverviewScreen(viewModel: OverviewViewModel = viewModel()) {
+fun OverviewScreen(viewModel: OverviewViewModel) {
     val uiState by viewModel.uiState.collectAsState()
 
     Column(
@@ -577,9 +579,21 @@ data class ChargerUiState(
     val power: Double = 0.0
 )
 
-class ChargerViewModel : ViewModel() {
+class ChargerViewModel(private val webSocketClient: WebSocketClient) : ViewModel() {
     private val _uiState = MutableStateFlow(ChargerUiState())
     val uiState: StateFlow<ChargerUiState> = _uiState.asStateFlow()
+    
+    init {
+        viewModelScope.launch {
+            webSocketClient.messages.collect { message ->
+                if (message is Message.PowerUsageUpdate) {
+                    message.updates.find { it.device == Devices.CAR_CHARGER }?.let { 
+                        _uiState.value = _uiState.value.copy(power = it.power.toDouble(), isCharging = it.power > 0)
+                    }
+                }
+            }
+        }
+    }
 
     fun toggleCharging() {
         val newCharging = !_uiState.value.isCharging
@@ -607,17 +621,48 @@ class ChargerViewModel : ViewModel() {
 }
 
 data class OverviewUiState(
-    val gridPower: Double = 2500.0,
-    val solarPower: Double = 1500.0,
+    val gridPower: Double = 0.0,
+    val solarPower: Double = 0.0,
     val chargerPower: Double = 0.0,
-    val heatPumpPower: Double = 800.0,
-    val batteryLevel: Int = 75,
-    val batteryPower: Double = -500.0 // Negative for charging, positive for discharging
+    val heatPumpPower: Double = 0.0,
+    val batteryLevel: Int = 0,
+    val batteryPower: Double = 0.0
 )
 
-class OverviewViewModel : ViewModel() {
+class OverviewViewModel(private val webSocketClient: WebSocketClient) : ViewModel() {
     private val _uiState = MutableStateFlow(OverviewUiState())
     val uiState: StateFlow<OverviewUiState> = _uiState.asStateFlow()
+    
+    init {
+        viewModelScope.launch {
+            webSocketClient.messages.collect { message ->
+                if (message is Message.PowerUsageUpdate) {
+                    var gridPower = 0.0
+                    var solarPower = 0.0
+                    var chargerPower = 0.0
+                    var heatPumpPower = 0.0
+                    var batteryPower = 0.0
+
+                    message.updates.forEach { 
+                        when (it.device) {
+                            Devices.GRID -> gridPower = it.power.toDouble()
+                            Devices.SOLAR -> solarPower = it.power.toDouble()
+                            Devices.CAR_CHARGER -> chargerPower = it.power.toDouble()
+                            Devices.HEATPUMP -> heatPumpPower = it.power.toDouble()
+                            Devices.BATTERY -> batteryPower = it.power.toDouble()
+                        }
+                    }
+                    _uiState.value = _uiState.value.copy(
+                        gridPower = gridPower,
+                        solarPower = solarPower,
+                        chargerPower = chargerPower,
+                        heatPumpPower = heatPumpPower,
+                        batteryPower = batteryPower
+                    )
+                }
+            }
+        }
+    }
 }
 
 sealed class LoginState {

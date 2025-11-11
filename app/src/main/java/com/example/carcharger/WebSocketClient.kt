@@ -83,10 +83,19 @@ class WebSocketClient {
                                         break
                                     }
                                     else -> {
-                                        disconnect()
-                                        Log.w("WebSocketClient", "Received message while not authenticated: $message")
-                                        _connectionStatus.value = ConnectionStatus.Error("Received message while not authenticated: $message")
-                                        break
+                                        if (_connectionStatus.value == ConnectionStatus.Connected) {
+                                            _messages.emit(deserializeMessage(json))
+                                        }
+                                        else {
+                                            disconnect()
+                                            Log.w(
+                                                "WebSocketClient",
+                                                "Received message while not authenticated: $message"
+                                            )
+                                            _connectionStatus.value =
+                                                ConnectionStatus.Error("Received message while not authenticated: $message")
+                                            break
+                                        }
                                     }
                                 }
                             }
