@@ -29,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -38,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -47,6 +49,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,19 +70,39 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
+    val appContainer = (LocalContext.current.applicationContext as CarChargerApplication).container
+    val loginViewModel: LoginViewModel = viewModel(factory = ViewModelFactory(appContainer))
+
     NavHost(navController = navController, startDestination = "login") {
-        composable("login") { LoginScreen(navController) }
+        composable("login") {
+            LoginScreen(
+                navController = navController,
+                viewModel = loginViewModel
+            )
+        }
         composable("main/{username}") { backStackEntry ->
             MainScreen(navController, backStackEntry.arguments?.getString("username") ?: "")
         }
         composable("profile/{username}") { backStackEntry ->
-            ProfileScreen(navController, backStackEntry.arguments?.getString("username") ?: "")
+            ProfileScreen(
+                navController = navController,
+                username = backStackEntry.arguments?.getString("username") ?: "",
+                onLogout = {
+                    loginViewModel.logout()
+                    navController.navigate("login") {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            inclusive = true
+                        }
+                        launchSingleTop = true
+                    }
+                }
+            )
         }
     }
 }
 
 @Composable
-fun LoginScreen(navController: NavController, viewModel: LoginViewModel = viewModel()) {
+fun LoginScreen(navController: NavController, viewModel: LoginViewModel) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     val loginState by viewModel.loginState.collectAsState()
@@ -208,7 +231,7 @@ fun MainScreen(navController: NavController, username: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(navController: NavController, username: String) {
+fun ProfileScreen(navController: NavController, username: String, onLogout: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -245,14 +268,7 @@ fun ProfileScreen(navController: NavController, username: String) {
                 }
             }
             Button(
-                onClick = {
-                    navController.navigate("login") {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            inclusive = true
-                        }
-                        launchSingleTop = true
-                    }
-                },
+                onClick = onLogout,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Logout")
@@ -610,19 +626,31 @@ sealed class LoginState {
     data class Error(val message: String) : LoginState()
 }
 
-class LoginViewModel(application: Application) : AndroidViewModel(application) {
+class LoginViewModel(private val webSocketClient: WebSocketClient) : ViewModel() {
     private val _loginState = MutableStateFlow<LoginState>(LoginState.Idle)
     val loginState: StateFlow<LoginState> = _loginState.asStateFlow()
 
+    init {
+        viewModelScope.launch {
+            webSocketClient.connectionStatus.collect { status ->
+                when (status) {
+                    is ConnectionStatus.Connected -> _loginState.value = LoginState.Success
+                    is ConnectionStatus.Error -> _loginState.value = LoginState.Error(status.message)
+                    is ConnectionStatus.Idle -> _loginState.value = LoginState.Idle
+                }
+            }
+        }
+    }
+
     fun login(username: String, password: String) {
         if (username.isNotEmpty() && password.isNotEmpty()) {
-            if (username == "admin" && password == "password") {
-                _loginState.value = LoginState.Success
-            } else {
-                _loginState.value = LoginState.Error("Invalid username or password")
-            }
+            webSocketClient.connect(username, password)
         } else {
             _loginState.value = LoginState.Error("Username and password cannot be empty")
         }
+    }
+
+    fun logout() {
+        webSocketClient.disconnect()
     }
 }
